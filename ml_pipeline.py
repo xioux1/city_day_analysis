@@ -1,4 +1,4 @@
-"""End-to-end dataset analysis and model selection pipeline for city_day.csv."""
+"""Aplicación del notebook de clase al dataset city_day.csv."""
 
 from pathlib import Path
 
@@ -6,36 +6,35 @@ import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
-    f1_score,
+    confusion_matrix,
     mean_absolute_error,
+    mean_squared_error,
     r2_score,
-    roc_auc_score,
 )
 from sklearn.model_selection import (
     GridSearchCV,
+    KFold,
+    ParameterGrid,
     RandomizedSearchCV,
     StratifiedKFold,
-    KFold,
-    cross_validate,
+    cross_val_score,
     train_test_split,
 )
+from sklearn.neural_network import MLPClassifier, MLPRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
-N_SPLITS = 5
 DATA_PATH = Path("city_day.csv")
 
 
 def load_data(path: Path) -> pd.DataFrame:
     if not path.exists():
-        raise FileNotFoundError(f"Dataset not found: {path}")
+        raise FileNotFoundError(f"Dataset no encontrado: {path}")
     return pd.read_csv(path)
 
 
@@ -56,6 +55,7 @@ def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
             ("scaler", StandardScaler()),
         ]
     )
+
     categorical_pipeline = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
@@ -73,130 +73,198 @@ def build_preprocessor(X: pd.DataFrame) -> ColumnTransformer:
 
 def run_classification(X: pd.DataFrame, y: pd.Series) -> None:
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=TEST_SIZE,
-        random_state=RANDOM_STATE,
-        stratify=y,
+        X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y
     )
 
     preprocessor = build_preprocessor(X_train)
-    pipeline = Pipeline(
+    base_pipeline = Pipeline(
         steps=[
             ("prep", preprocessor),
-            ("model", LogisticRegression(max_iter=2000, random_state=RANDOM_STATE)),
+            (
+                "mlp",
+                MLPClassifier(
+                    hidden_layer_sizes=(50,),
+                    activation="relu",
+                    alpha=0.0001,
+                    max_iter=1000,
+                    random_state=RANDOM_STATE,
+                ),
+            ),
         ]
     )
 
-    cv = StratifiedKFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
-    scores = cross_validate(
-        pipeline,
-        X_train,
-        y_train,
-        cv=cv,
-        scoring=["accuracy", "f1_weighted", "roc_auc_ovr_weighted"],
+    print("\n=== Clasificación con enfoque notebook ===")
+    print("(extraido del notebook de clase) Modelo base MLPClassifier + Pipeline")
+
+    base_pipeline.fit(X_train, y_train)
+    y_pred_base = base_pipeline.predict(X_test)
+    print(f"Accuracy test (base): {accuracy_score(y_test, y_pred_base):.4f}")
+
+    cv = StratifiedKFold(n_splits=10, shuffle=True, random_state=RANDOM_STATE)
+    scores_cv_base = cross_val_score(base_pipeline, X, y, cv=cv, scoring="accuracy")
+    print("(extraido del notebook de clase) Validación cruzada con accuracy")
+    print(f"CV mean: {scores_cv_base.mean():.4f} | std: {scores_cv_base.std():.4f}")
+
+    param_grid_clf = {
+        "mlp__hidden_layer_sizes": [(20,), (50,), (100,), (50, 50)],
+        "mlp__activation": ["relu", "tanh"],
+        "mlp__alpha": [0.0001, 0.001, 0.01],
+    }
+
+    combinaciones = list(ParameterGrid(param_grid_clf))
+    print("(extraido del notebook de clase) Combinaciones ParameterGrid:", len(combinaciones))
+
+    grid_search_clf = GridSearchCV(
+        estimator=base_pipeline,
+        param_grid=param_grid_clf,
+        scoring="accuracy",
+        cv=5,
+        n_jobs=-1,
         return_train_score=True,
     )
+    grid_search_clf.fit(X, y)
 
-    print("=== Cross-validation (classification) ===")
-    for metric in ["test_accuracy", "test_f1_weighted", "test_roc_auc_ovr_weighted"]:
-        print(f"{metric}: mean={scores[metric].mean():.4f}, std={scores[metric].std():.4f}")
+    best_model_grid = grid_search_clf.best_estimator_
+    y_pred_grid = best_model_grid.predict(X_test)
 
-    search_space = [
-        {
-            "model": [LogisticRegression(max_iter=2000, random_state=RANDOM_STATE)],
-            "model__C": [0.1, 1.0, 10.0],
-            "model__class_weight": [None, "balanced"],
-        },
-        {
-            "model": [RandomForestClassifier(random_state=RANDOM_STATE)],
-            "model__n_estimators": [100, 300],
-            "model__max_depth": [None, 8, 16],
-            "model__class_weight": [None, "balanced"],
-        },
-    ]
+    param_dist_clf = {
+        "mlp__hidden_layer_sizes": [(20,), (50,), (100,), (150,), (50, 50), (100, 50)],
+        "mlp__activation": ["relu", "tanh", "logistic"],
+        "mlp__alpha": np.logspace(-5, -1, 20),
+        "mlp__learning_rate_init": np.logspace(-4, -1, 20),
+    }
 
-    grid = GridSearchCV(
-        estimator=pipeline,
-        param_grid=search_space,
-        scoring="f1_weighted",
-        cv=cv,
+    random_search_clf = RandomizedSearchCV(
+        estimator=base_pipeline,
+        param_distributions=param_dist_clf,
+        n_iter=15,
+        scoring="accuracy",
+        cv=5,
+        random_state=RANDOM_STATE,
         n_jobs=-1,
+        return_train_score=True,
     )
-    grid.fit(X_train, y_train)
+    random_search_clf.fit(X_train, y_train)
 
-    best_model = grid.best_estimator_
-    y_pred = best_model.predict(X_test)
+    best_model_random = random_search_clf.best_estimator_
+    y_pred_random = best_model_random.predict(X_test)
 
-    print("\n=== Final test (classification) ===")
-    print(f"Best params: {grid.best_params_}")
-    print(f"Accuracy: {accuracy_score(y_test, y_pred):.4f}")
-    print(f"F1 weighted: {f1_score(y_test, y_pred, average='weighted'):.4f}")
-    if y.nunique() == 2:
-        y_prob = best_model.predict_proba(X_test)[:, 1]
-        print(f"ROC AUC: {roc_auc_score(y_test, y_prob):.4f}")
-    print(classification_report(y_test, y_pred))
+    print("\n=== Comparación final clasificación ===")
+    print(f"Grid best params: {grid_search_clf.best_params_}")
+    print(f"Random best params: {random_search_clf.best_params_}")
+    print(
+        pd.DataFrame(
+            {
+                "Modelo": ["Base", "GridSearchCV", "RandomizedSearchCV"],
+                "Score_validacion": [
+                    scores_cv_base.mean(),
+                    grid_search_clf.best_score_,
+                    random_search_clf.best_score_,
+                ],
+                "Score_test": [
+                    accuracy_score(y_test, y_pred_base),
+                    accuracy_score(y_test, y_pred_grid),
+                    accuracy_score(y_test, y_pred_random),
+                ],
+            }
+        )
+    )
+    print("Matriz de confusión (mejor Grid):")
+    print(confusion_matrix(y_test, y_pred_grid))
+    print(classification_report(y_test, y_pred_grid))
 
 
 def run_regression(X: pd.DataFrame, y: pd.Series) -> None:
     X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=TEST_SIZE,
-        random_state=RANDOM_STATE,
+        X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE
     )
 
     preprocessor = build_preprocessor(X_train)
-    pipeline = Pipeline(
+    base_pipeline = Pipeline(
         steps=[
             ("prep", preprocessor),
-            ("model", LinearRegression()),
+            (
+                "mlp",
+                MLPRegressor(
+                    hidden_layer_sizes=(50,),
+                    activation="relu",
+                    alpha=0.0001,
+                    max_iter=1000,
+                    random_state=RANDOM_STATE,
+                ),
+            ),
         ]
     )
 
-    cv = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_STATE)
-    scores = cross_validate(
-        pipeline,
-        X_train,
-        y_train,
-        cv=cv,
-        scoring=["r2", "neg_mean_absolute_error"],
+    print("\n=== Regresión con enfoque notebook ===")
+    print("(extraido del notebook de clase) Modelo base MLPRegressor + Pipeline")
+
+    base_pipeline.fit(X_train, y_train)
+    y_pred_base = base_pipeline.predict(X_test)
+
+    cv = KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    scores_cv_reg = cross_val_score(base_pipeline, X, y, cv=cv, scoring="r2")
+
+    param_grid_reg = {
+        "mlp__hidden_layer_sizes": [(50,), (100,)],
+        "mlp__activation": ["relu", "tanh"],
+        "mlp__alpha": [0.0001, 0.001],
+    }
+    grid_search_reg = GridSearchCV(
+        estimator=base_pipeline,
+        param_grid=param_grid_reg,
+        scoring="r2",
+        cv=3,
+        n_jobs=-1,
         return_train_score=True,
     )
+    grid_search_reg.fit(X, y)
 
-    print("=== Cross-validation (regression) ===")
-    print(f"test_r2: mean={scores['test_r2'].mean():.4f}, std={scores['test_r2'].std():.4f}")
-    print(
-        "test_mae: mean="
-        f"{-scores['test_neg_mean_absolute_error'].mean():.4f}, "
-        f"std={scores['test_neg_mean_absolute_error'].std():.4f}"
-    )
+    best_model_grid = grid_search_reg.best_estimator_
+    y_pred_grid = best_model_grid.predict(X_test)
 
-    param_distributions = {
-        "model": [RandomForestRegressor(random_state=RANDOM_STATE)],
-        "model__n_estimators": [100, 300, 500],
-        "model__max_depth": [None, 8, 16, 32],
-        "model__min_samples_split": [2, 5, 10],
+    param_dist_reg = {
+        "mlp__hidden_layer_sizes": [(50,), (100,), (150,), (50, 50), (100, 50)],
+        "mlp__activation": ["relu", "tanh", "logistic"],
+        "mlp__alpha": np.logspace(-5, -1, 20),
+        "mlp__learning_rate_init": np.logspace(-4, -2, 20),
     }
-
-    random_search = RandomizedSearchCV(
-        estimator=pipeline,
-        param_distributions=param_distributions,
-        n_iter=10,
-        scoring="neg_mean_absolute_error",
-        cv=cv,
+    random_search_reg = RandomizedSearchCV(
+        estimator=base_pipeline,
+        param_distributions=param_dist_reg,
+        n_iter=8,
+        scoring="r2",
+        cv=3,
         random_state=RANDOM_STATE,
         n_jobs=-1,
+        return_train_score=True,
     )
-    random_search.fit(X_train, y_train)
+    random_search_reg.fit(X_train, y_train)
 
-    best_model = random_search.best_estimator_
-    y_pred = best_model.predict(X_test)
+    best_model_random = random_search_reg.best_estimator_
+    y_pred_random = best_model_random.predict(X_test)
 
-    print("\n=== Final test (regression) ===")
-    print(f"Best params: {random_search.best_params_}")
-    print(f"R2: {r2_score(y_test, y_pred):.4f}")
-    print(f"MAE: {mean_absolute_error(y_test, y_pred):.4f}")
+    print("(extraido del notebook de clase) CV R2 base:", round(scores_cv_reg.mean(), 4))
+    print("\n=== Comparación final regresión ===")
+    print(
+        pd.DataFrame(
+            {
+                "Modelo": ["Base", "GridSearchCV", "RandomizedSearchCV"],
+                "Score_validacion_R2": [
+                    scores_cv_reg.mean(),
+                    grid_search_reg.best_score_,
+                    random_search_reg.best_score_,
+                ],
+                "Score_test_R2": [
+                    r2_score(y_test, y_pred_base),
+                    r2_score(y_test, y_pred_grid),
+                    r2_score(y_test, y_pred_random),
+                ],
+            }
+        )
+    )
+    print(f"MAE Base: {mean_absolute_error(y_test, y_pred_base):.4f}")
+    print(f"RMSE Base: {np.sqrt(mean_squared_error(y_test, y_pred_base)):.4f}")
 
 
 def main() -> None:
@@ -204,13 +272,14 @@ def main() -> None:
     target_col = df.columns[-1]
 
     print(f"Dataset shape: {df.shape}")
-    print(f"Target column selected: {target_col}")
+    print(f"Target seleccionado: {target_col}")
 
     y = df[target_col]
     X = df.drop(columns=[target_col])
 
+    print("(ya estaba implementado, coincide con notebook) Uso de Pipeline para evitar fugas.")
     problem_type = infer_problem_type(y)
-    print(f"Inferred task type: {problem_type}")
+    print(f"Tipo inferido: {problem_type}")
 
     if problem_type == "classification":
         run_classification(X, y)

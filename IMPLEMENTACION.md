@@ -1,19 +1,17 @@
 # Implementación del análisis de dataset
 
-Este repositorio ahora incluye una implementación base en `ml_pipeline.py` que sigue el plan propuesto:
+Se actualizó `ml_pipeline.py` para tomar como referencia directa el notebook de clase de MLP tuning.
 
-1. Carga del dataset `city_day.csv`.
-2. Detección automática de tipo de tarea (clasificación/regresión).
-3. Separación `train/test` con `random_state` fijo para reproducibilidad.
-4. Pipeline de preprocesamiento con:
-   - imputación,
-   - escalado para variables numéricas,
-   - one-hot encoding para categóricas.
-5. Validación cruzada (`KFold` o `StratifiedKFold`).
-6. Optimización de hiperparámetros:
-   - `GridSearchCV` en clasificación,
-   - `RandomizedSearchCV` en regresión.
-7. Evaluación final sobre conjunto de test no visto.
+## Estado de implementación vs notebook
+
+- **(ya estaba implementado, coincide con notebook)** uso de `Pipeline` para integrar preprocesamiento + modelo.
+- **(extraido del notebook de clase)** modelo base de clasificación con `MLPClassifier`.
+- **(extraido del notebook de clase)** validación cruzada con `cross_val_score`.
+- **(extraido del notebook de clase)** inspección de combinaciones con `ParameterGrid`.
+- **(extraido del notebook de clase)** búsqueda exhaustiva con `GridSearchCV`.
+- **(extraido del notebook de clase)** búsqueda aleatoria con `RandomizedSearchCV`.
+- **(extraido del notebook de clase)** comparación final entre Base vs GridSearchCV vs RandomizedSearchCV en validación y test.
+- **(extraido del notebook de clase)** flujo equivalente para regresión con `MLPRegressor` y scoring `r2`.
 
 ## Cómo ejecutar
 
@@ -24,4 +22,4 @@ python ml_pipeline.py
 
 ## Nota
 
-El script toma la última columna del CSV como variable objetivo. Si necesitas una columna específica, podemos parametrizarlo con argumentos CLI.
+El script toma la última columna del CSV como variable objetivo. Si necesitas fijar otra columna objetivo, se puede parametrizar por CLI.

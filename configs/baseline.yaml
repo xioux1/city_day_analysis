@@ -1,0 +1,21 @@
+run_name: baseline
+
+data:
+  path: city_day.csv
+  target_column:
+
+split:
+  test_size: 0.2
+  random_state: 42
+
+model:
+  task: auto
+  type: mlp
+  params:
+    hidden_layer_sizes: [50]
+    activation: relu
+    alpha: 0.0001
+    max_iter: 300
+
+output:
+  results_dir: results
